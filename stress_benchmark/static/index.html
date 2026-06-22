@@ -316,8 +316,8 @@
 <script>
 // ── Config ──────────────────────────────────────────────
 // Same origin (FastAPI serves this file): leave as ""
-// Running frontend separately (dev): set to "http://localhost:8000"
-const API_BASE = "http://localhost:8000";
+// Same-origin API when served by FastAPI.
+const API_BASE = "";
 
 // ── State ───────────────────────────────────────────────
 let chartStress = null;

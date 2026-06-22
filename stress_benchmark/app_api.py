@@ -2,6 +2,7 @@ import io
 import logging
 import math
 import os
+from importlib import metadata
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,13 +49,30 @@ def serve_index():
 # --- Model load ---
 MODEL_BUNDLE = None
 
+
+def _check_runtime_compatibility(bundle):
+    trained = (bundle.get("dependency_versions") or {}).get("scikit-learn")
+    try:
+        runtime = metadata.version("scikit-learn")
+    except metadata.PackageNotFoundError:
+        runtime = None
+    if trained and runtime and trained != runtime:
+        raise RuntimeError(
+            f"Model was trained with scikit-learn=={trained}, "
+            f"but this server is using scikit-learn=={runtime}. "
+            "Start the demo with run_demo.bat or use the matching Python environment."
+        )
+
+
 @app.on_event("startup")
 def startup():
     global MODEL_BUNDLE
     try:
         MODEL_BUNDLE = load_bundle(MODEL_PATH)
+        _check_runtime_compatibility(MODEL_BUNDLE)
         logger.info("Model loaded successfully from %s.", MODEL_PATH)
     except Exception as e:
+        MODEL_BUNDLE = None
         logger.error(f"Cannot load model: {e}")
 
 
@@ -129,6 +147,9 @@ async def analyze_file(file: UploadFile = File(...)):
         results_df = predict_feature_frame(MODEL_BUNDLE, features_df)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=f"Prediction error: {e}")
+    except Exception as e:
+        logger.exception("Prediction failed")
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
 
     # Normalize output column names for the frontend.
     if "decision_adjusted_label" in results_df.columns:

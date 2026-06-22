@@ -96,7 +96,7 @@ predictions = predict_feature_frame(bundle, features)
 Run the local demo API:
 
 ```powershell
-python -m uvicorn stress_benchmark.app_api:app --host 127.0.0.1 --port 8000
+.\run_demo.bat
 ```
 
 Then open `http://127.0.0.1:8000/`. By default the API loads
