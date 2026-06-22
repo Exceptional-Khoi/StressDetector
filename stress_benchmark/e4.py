@@ -79,6 +79,29 @@ def _read_ibi(inner: zipfile.ZipFile) -> Optional[Tuple[float, float, np.ndarray
     return start_ts, 1.0, values
 
 
+def _read_ibi_events(inner: zipfile.ZipFile) -> Optional[Tuple[float, float, np.ndarray]]:
+    try:
+        with inner.open("IBI.csv") as fh:
+            first = fh.readline()
+            if not first:
+                return None
+            start_ts = _first_float(first)
+            df = pd.read_csv(fh, header=None)
+    except KeyError:
+        return None
+    except pd.errors.EmptyDataError:
+        return None
+    if df.empty or df.shape[1] < 2:
+        return None
+    rel_t = pd.to_numeric(df.iloc[:, 0], errors="coerce").to_numpy(dtype=float)
+    ibi = pd.to_numeric(df.iloc[:, 1], errors="coerce").to_numpy(dtype=float)
+    mask = np.isfinite(rel_t) & np.isfinite(ibi)
+    if not np.any(mask):
+        return None
+    events = np.column_stack([rel_t[mask], ibi[mask]])
+    return start_ts, np.nan, events
+
+
 def read_e4_zip_bytes(subject_id: str, session_id: str, data: bytes) -> Optional[E4Record]:
     with zipfile.ZipFile(io.BytesIO(data)) as inner:
         parsed_signals: Dict[str, Tuple[float, float, np.ndarray]] = {}
@@ -101,11 +124,21 @@ def read_e4_zip_bytes(subject_id: str, session_id: str, data: bytes) -> Optional
             start_ts, fs, arr = parsed_ibi
             parsed_signals["ibi"] = (start_ts, fs, arr)
             starts.append(start_ts)
+        parsed_ibi_events = _read_ibi_events(inner)
+        if parsed_ibi_events is not None:
+            start_ts, fs, arr = parsed_ibi_events
+            parsed_signals["ibi_events"] = (start_ts, fs, arr)
+            starts.append(start_ts)
         if not parsed_signals or not starts:
             return None
         global_start = float(min(starts))
         signals: Dict[str, Tuple[np.ndarray, float]] = {}
         for name, (start_ts, fs, arr) in parsed_signals.items():
+            if name == "ibi_events":
+                arr = np.asarray(arr, dtype=float).copy()
+                arr[:, 0] = arr[:, 0] + (float(start_ts) - global_start)
+                signals[name] = (arr, fs)
+                continue
             offset_samples = int(round((float(start_ts) - global_start) * float(fs)))
             if offset_samples > 0:
                 pad_shape = (offset_samples,) + arr.shape[1:]

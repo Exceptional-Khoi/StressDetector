@@ -103,7 +103,7 @@ def feature_columns(df: pd.DataFrame, include_time_features: bool = False) -> Li
 
 def available_model_specs(config: BenchmarkConfig) -> Dict[str, ModelSpec]:
     _require_sklearn()
-    from sklearn.ensemble import ExtraTreesClassifier, GradientBoostingClassifier, RandomForestClassifier
+    from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
     from sklearn.naive_bayes import GaussianNB
     from sklearn.neighbors import KNeighborsClassifier
 
@@ -134,33 +134,7 @@ def available_model_specs(config: BenchmarkConfig) -> Dict[str, ModelSpec]:
         ),
         "knn": ModelSpec("knn", KNeighborsClassifier(n_neighbors=9, weights="distance"), needs_scaling=True),
         "gnb": ModelSpec("gnb", GaussianNB(var_smoothing=1e-8), needs_scaling=False),
-        "gb": ModelSpec(
-            "gb",
-            GradientBoostingClassifier(random_state=config.random_state, learning_rate=0.05, n_estimators=250, max_depth=3),
-            needs_scaling=False,
-        ),
     }
-
-    try:
-        from imblearn.ensemble import BalancedRandomForestClassifier
-
-        specs["brf"] = ModelSpec(
-            "brf",
-            BalancedRandomForestClassifier(
-                n_estimators=600,
-                criterion="entropy",
-                min_samples_leaf=2,
-                sampling_strategy="all",
-                replacement=True,
-                bootstrap=False,
-                n_jobs=-1,
-                random_state=config.random_state,
-            ),
-            needs_scaling=False,
-            use_external_resampling=False,
-        )
-    except Exception:
-        pass
 
     try:
         from xgboost import XGBClassifier
@@ -254,8 +228,21 @@ def _maybe_resample(X: np.ndarray, y: np.ndarray, use_smote: bool, random_state:
         smote = SMOTE(k_neighbors=k_neighbors, random_state=random_state)
         X_res, y_res = smote.fit_resample(X, y)
         return X_res, y_res, f"smote_k{k_neighbors}"
-    except Exception:
-        return X, y, "skipped_imblearn_missing"
+    except ImportError:
+        rng = np.random.default_rng(random_state)
+        counts_dict = counts.to_dict()
+        target_count = int(max(counts_dict.values()))
+        selected = []
+        for class_value, count in counts_dict.items():
+            idx = np.flatnonzero(y == class_value)
+            selected.extend(idx.tolist())
+            if count < target_count and idx.size:
+                selected.extend(rng.choice(idx, size=target_count - int(count), replace=True).tolist())
+        selected = np.asarray(selected, dtype=int)
+        rng.shuffle(selected)
+        return X[selected], y[selected], "random_oversample_fallback_importerror"
+    except Exception as exc:
+        return X, y, f"skipped_smote_{type(exc).__name__}"
 
 
 def _group_class_cap_indices(
@@ -391,11 +378,32 @@ def _calibration_split(
     y_encoded: np.ndarray,
     groups: Optional[np.ndarray],
     random_state: int,
+    preferred_mask: Optional[np.ndarray] = None,
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     _require_sklearn()
     classes = set(np.unique(y_encoded).tolist())
     if len(classes) < 2 or len(y_encoded) < 20:
         return None
+
+    if preferred_mask is not None:
+        preferred_mask = np.asarray(preferred_mask, dtype=bool)
+        preferred_idx = np.flatnonzero(preferred_mask)
+        if preferred_idx.size >= 20 and set(np.unique(y_encoded[preferred_idx]).tolist()) == classes:
+            from sklearn.model_selection import StratifiedShuffleSplit
+
+            for test_size in [0.2, 0.25, 0.33]:
+                try:
+                    splitter = StratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
+                    _, rel_cal_idx = next(splitter.split(np.zeros(len(preferred_idx)), y_encoded[preferred_idx]))
+                    cal_idx = np.asarray(sorted(preferred_idx[rel_cal_idx].tolist()), dtype=int)
+                    model_idx = np.setdiff1d(np.arange(len(y_encoded)), cal_idx, assume_unique=False)
+                    if (
+                        set(np.unique(y_encoded[cal_idx]).tolist()) == classes
+                        and set(np.unique(y_encoded[model_idx]).tolist()) == classes
+                    ):
+                        return model_idx, cal_idx
+                except Exception:
+                    continue
 
     if groups is not None and len(np.unique(groups)) >= 4:
         from sklearn.model_selection import StratifiedGroupKFold
@@ -422,6 +430,12 @@ def _calibration_split(
         except Exception:
             continue
     return None
+
+
+def _source_calibration_mask(sources: Optional[np.ndarray], calibration_source: str) -> Optional[np.ndarray]:
+    if calibration_source == "all" or sources is None:
+        return None
+    return np.asarray(sources).astype(str) == calibration_source
 
 
 def _fit_base_model(
@@ -752,7 +766,12 @@ def _fit_predict(
             "threshold_tuning": "skipped_single_class_train",
             "tuning_selection": "none",
         }
-    split = _calibration_split(y_train_encoded, groups_train, config.random_state) if config.calibrate else None
+    calibration_mask = _source_calibration_mask(sources_train, config.calibration_source)
+    split = (
+        _calibration_split(y_train_encoded, groups_train, config.random_state, calibration_mask)
+        if config.calibrate
+        else None
+    )
     if split is None:
         model_idx = np.arange(len(y_train_encoded))
         cal_idx = None
@@ -804,7 +823,12 @@ def _fit_deploy_artifact(
     y_encoded = encoder.fit_transform(y)
     if len(encoder.classes_) < 2:
         raise ValueError("Final training requires at least two target classes.")
-    split = _calibration_split(y_encoded, None, config.random_state) if config.calibrate else None
+    calibration_mask = _source_calibration_mask(sources, config.calibration_source)
+    split = (
+        _calibration_split(y_encoded, None, config.random_state, calibration_mask)
+        if config.calibrate
+        else None
+    )
     if split is None:
         model_idx = np.arange(len(y_encoded))
         cal_idx = None
@@ -956,6 +980,7 @@ def evaluate_models(df: pd.DataFrame, config: BenchmarkConfig, out_dir: Path) ->
             "positive_recall_floor": config.positive_recall_floor,
             "tuning_selection_metric": config.tuning_selection_metric,
             "source_balance": config.source_balance,
+            "calibration_source": config.calibration_source,
         },
         "metrics_by_model": aggregate.round(6).to_dict(orient="index"),
         "paths": {
@@ -1053,6 +1078,7 @@ def train_deploy_models(df: pd.DataFrame, config: BenchmarkConfig, out_dir: Path
                 "calibration": fitted["calibration"],
                 "class_cap": fitted["class_cap"],
                 "source_balance": fitted["source_balance"],
+                "calibration_source": config.calibration_source,
                 "feature_selection": fitted["feature_selection"],
                 "n_selected_features": fitted["n_selected_features"],
                 "decision_threshold": fitted["decision_threshold"],
@@ -1092,16 +1118,28 @@ def train_deploy_models(df: pd.DataFrame, config: BenchmarkConfig, out_dir: Path
         )
 
     best_model = None
+    best_models_by_metric: Dict[str, Dict[str, object]] = {}
     metrics_path = out_dir / f"metrics_{config.task}.csv"
     if metrics_path.exists():
         metrics = pd.read_csv(metrics_path)
-        if not metrics.empty and "weighted_f1" in metrics:
-            ranking = metrics.groupby("model")["weighted_f1"].mean().sort_values(ascending=False)
-            for model_name in ranking.index.tolist():
-                candidate = next((item for item in saved if item["model"] == model_name), None)
-                if candidate:
-                    best_model = candidate
-                    break
+        if not metrics.empty:
+            for metric_name in ["weighted_f1", "balanced_accuracy", "macro_f1", "accuracy"]:
+                if metric_name not in metrics:
+                    continue
+                ranking = metrics.groupby("model")[metric_name].mean().sort_values(ascending=False)
+                for model_name in ranking.index.tolist():
+                    candidate = next((item for item in saved if item["model"] == model_name), None)
+                    if candidate:
+                        best_path = model_dir / f"{config.task}_best_{metric_name}_model.joblib"
+                        shutil.copy2(candidate["path"], best_path)
+                        best_models_by_metric[metric_name] = {
+                            **candidate,
+                            "selection_metric": metric_name,
+                            "selection_score": float(ranking.loc[model_name]),
+                            "best_model_path": str(best_path),
+                        }
+                        break
+            best_model = best_models_by_metric.get("weighted_f1")
     if best_model is None and saved:
         best_model = sorted(saved, key=lambda item: item["training_accuracy"], reverse=True)[0]
 
@@ -1126,9 +1164,11 @@ def train_deploy_models(df: pd.DataFrame, config: BenchmarkConfig, out_dir: Path
             "positive_recall_floor": config.positive_recall_floor,
             "tuning_selection_metric": config.tuning_selection_metric,
             "source_balance": config.source_balance,
+            "calibration_source": config.calibration_source,
         },
         "models": saved,
         "best_model": best_model,
+        "best_models_by_metric": best_models_by_metric,
     }
     manifest_path = model_dir / f"manifest_{config.task}.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

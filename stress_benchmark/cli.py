@@ -66,6 +66,7 @@ def _benchmark_config(args: argparse.Namespace) -> BenchmarkConfig:
         positive_recall_floor=args.positive_recall_floor,
         tuning_selection_metric=args.tuning_selection_metric,
         source_balance=args.source_balance,
+        calibration_source=args.calibration_source,
         random_state=args.random_state,
         include_time_features=args.include_time_features,
         tune=args.tune,
@@ -86,6 +87,7 @@ def _extraction_config(args: argparse.Namespace) -> ExtractionConfig:
         baseline_minutes=args.baseline_minutes,
         label_purity=args.label_purity,
         min_label_overlap=args.min_label_overlap,
+        label_boundary_margin_sec=args.label_boundary_margin_sec,
         survey_offset_hours=survey_offset,
         max_wesad_subjects=args.max_wesad_subjects,
         max_nurse_sessions=args.max_nurse_sessions,
@@ -176,6 +178,7 @@ def add_common_extract_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--baseline-minutes", type=int, default=10)
     parser.add_argument("--label-purity", type=float, default=0.80)
     parser.add_argument("--min-label-overlap", type=float, default=0.50)
+    parser.add_argument("--label-boundary-margin-sec", type=float, default=0.0)
     parser.add_argument("--survey-offset", default="auto", help="Survey timezone offset from UTC, or auto")
     parser.add_argument("--max-wesad-subjects", type=int, default=None)
     parser.add_argument("--max-nurse-sessions", type=int, default=None)
@@ -199,7 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--task", choices=["stress3", "binary"], default="stress3")
     bench.add_argument("--protocol", choices=["loso", "groupkfold", "stratified"], default="groupkfold")
     bench.add_argument("--n-splits", type=int, default=5)
-    bench.add_argument("--models", default="brf,rf,extratrees,knn,gnb,gb,xgb,lgbm")
+    bench.add_argument("--models", default="rf,extratrees,xgb,lgbm,knn,gnb")
     bench.add_argument("--no-smote", action="store_true")
     bench.add_argument("--no-calibrate", action="store_true")
     bench.add_argument("--calibration-method", choices=["sigmoid", "isotonic"], default="sigmoid")
@@ -218,6 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--positive-recall-floor", type=float, default=0.70)
     bench.add_argument("--tuning-selection-metric", choices=["balanced_accuracy", "macro_f1"], default="balanced_accuracy")
     bench.add_argument("--source-balance", choices=["none", "source", "source_class"], default="none")
+    bench.add_argument("--calibration-source", choices=["all", "nurse", "wesad"], default="all")
     bench.add_argument("--include-time-features", action="store_true")
     bench.add_argument("--tune", action="store_true")
     bench.add_argument("--random-state", type=int, default=42)
@@ -229,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_extract_args(train_final)
     train_final.add_argument("--task", choices=["stress3", "binary"], default="stress3")
     train_final.add_argument("--n-splits", type=int, default=5)
-    train_final.add_argument("--models", default="brf,rf,extratrees,knn,gnb,xgb,lgbm")
+    train_final.add_argument("--models", default="rf,extratrees,xgb,lgbm,knn,gnb")
     train_final.add_argument("--no-smote", action="store_true")
     train_final.add_argument("--no-calibrate", action="store_true")
     train_final.add_argument("--calibration-method", choices=["sigmoid", "isotonic"], default="sigmoid")
@@ -248,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_final.add_argument("--positive-recall-floor", type=float, default=0.70)
     train_final.add_argument("--tuning-selection-metric", choices=["balanced_accuracy", "macro_f1"], default="balanced_accuracy")
     train_final.add_argument("--source-balance", choices=["none", "source", "source_class"], default="none")
+    train_final.add_argument("--calibration-source", choices=["all", "nurse", "wesad"], default="all")
     train_final.add_argument("--include-time-features", action="store_true")
     train_final.add_argument("--tune", action="store_true")
     train_final.add_argument("--random-state", type=int, default=42)

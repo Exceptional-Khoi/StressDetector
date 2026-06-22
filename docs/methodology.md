@@ -26,11 +26,10 @@ This makes WESAD compatible with the nurse dataset's low/moderate/high stress la
 ## What Is Taken From The Nurse Stress Paper
 
 - Aggregate raw time-series data into one-minute windows.
-- Use E4 modalities: ACC, EDA, HR/BVP-derived heart features, and TEMP.
+- Use E4 modalities: ACC, EDA, direct E4 HR/IBI, BVP-derived heart features, and TEMP.
 - Handle class imbalance using SMOTE inside each training fold only.
-- Add Balanced Random Forest as an imbalance-aware tree baseline.
-- Compare Random Forest, Balanced Random Forest, k-NN, Gaussian Naive Bayes,
-  ExtraTrees, XGBoost, and LightGBM when installed.
+- Compare exactly six benchmark families: Random Forest, ExtraTrees, XGBoost,
+  LightGBM, k-NN, and Gaussian Naive Bayes.
 - Report accuracy, balanced accuracy, macro F1, weighted F1, classification reports, and confusion matrices.
 - Keep temporal and source analysis available, but do not include time/source as default features.
 
@@ -57,7 +56,7 @@ caused by different resting HR, EDA, temperature, and movement patterns.
 The pipeline extracts ACC magnitude, dynamic magnitude, jerk, and activity features.
 The decision layer then delays stress alerts when:
 
-- HR/heart-like features are elevated,
+- HR/IBI/BVP-derived heart-like features are elevated,
 - ACC activity is high,
 - EDA does not rise enough.
 
@@ -99,9 +98,8 @@ core layers:
 - Per-subject per-class cap: at most 150 windows per subject/class are used in the
   model-training subset. This prevents one long or heavily represented subject/class from
   dominating the fitted model.
-- Resampling: regular models use SMOTE only after the train/calibration split and only
-  on the capped model-training subset. Balanced Random Forest uses its own internal
-  balancing instead of external SMOTE.
+- Resampling: SMOTE is used only after the train/calibration split and only on the
+  capped model-training subset.
 - Threshold tuning: binary decision thresholds are tuned on a held-out calibration split
   using balanced accuracy by default. Test folds are never used for threshold selection.
 
@@ -119,6 +117,29 @@ The code also supports scientific ablations for:
 These ablations are selected using the train-fold calibration split only. If an ablation
 does not improve held-out fold performance, it is reported but not used for the default
 deploy bundle.
+
+### 6. Scientific Performance Improvements
+
+The latest `outputs_scientific` rerun adds the following improvements:
+
+- Event-based IBI features: HRV is computed directly from `IBI.csv` beat events
+  inside each window, instead of relying only on a 1 Hz filled IBI series.
+- Signal-quality features: IBI count, valid ratio, coverage ratio, BVP RR validity,
+  and HR/IBI/BVP consistency features are used so the model can learn when heart
+  features are trustworthy.
+- Multi-window context: the 60s feature window is augmented with trailing 120s and
+  300s summaries for physiology that evolves more slowly, especially EDA and HRV.
+- Robust personalized baseline: baseline deltas are kept, while ratio/z-score
+  features use floor/clipping to avoid near-zero baseline artifacts.
+- Domain-aware calibration: combined models can train on WESAD+nurse while tuning
+  calibration and binary thresholds on nurse windows only.
+- Strict nurse label cleaning: benchmarks can require stronger label overlap and
+  remove windows close to survey boundaries.
+- Threshold-grid tuning: binary thresholds can be selected from balanced accuracy,
+  macro F1, and recall-floor candidates.
+- Temporal smoothing: the decision layer tracks recent stress-like windows and
+  emits support states such as `monitor_more`, `rising_stress`, and
+  `persistent_stress`.
 
 ## Scientific Evaluation Protocol
 

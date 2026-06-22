@@ -15,6 +15,7 @@ class ExtractionConfig:
     baseline_minutes: int = 10
     label_purity: float = 0.80
     min_label_overlap: float = 0.50
+    label_boundary_margin_sec: float = 0.0
     survey_offset_hours: Optional[float] = None
     max_wesad_subjects: Optional[int] = None
     max_nurse_sessions: Optional[int] = None
@@ -55,7 +56,8 @@ class BenchmarkConfig:
     positive_recall_floor: float = 0.70
     tuning_selection_metric: str = "balanced_accuracy"
     source_balance: str = "none"
+    calibration_source: str = "all"
     random_state: int = 42
     include_time_features: bool = False
     tune: bool = False
-    models: Sequence[str] = ("brf", "rf", "extratrees", "knn", "gnb", "gb", "xgb", "lgbm")
+    models: Sequence[str] = ("rf", "extratrees", "xgb", "lgbm", "knn", "gnb")

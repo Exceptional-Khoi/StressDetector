@@ -18,8 +18,8 @@ subject-level splits, and source-specific label rules.
 - Personal baseline normalization per subject.
 - ACC-based physical-activity context features.
 - Leakage-safe subject-level benchmark splits.
-- Classical ML benchmark: Random Forest, Balanced Random Forest, k-NN, Gaussian Naive Bayes, Extra Trees, Gradient Boosting, and optional XGBoost/LightGBM.
-- Binary imbalance handling: per-subject per-class cap, SMOTE/internal balancing, sigmoid calibration, and threshold tuning.
+- Classical ML benchmark: Random Forest, Extra Trees, XGBoost, LightGBM, k-NN, and Gaussian Naive Bayes.
+- Binary imbalance handling: per-subject per-class cap, SMOTE, sigmoid calibration, and threshold tuning.
 - Optional ablations: top-k feature selection, class-cap grids, threshold-metric grids, and source-balanced training.
 - Decision-support post-processing with alert levels and simple recommendations.
 
@@ -36,7 +36,8 @@ The full benchmark expects `scikit-learn`, `imbalanced-learn`, `xgboost`, and
 If a requested model is unavailable, the pipeline stops instead of silently
 running a reduced benchmark.
 For deployment, keep the Python package versions consistent with the training
-environment. The current saved bundles were trained with `scikit-learn==1.9.0`;
+environment. The latest `outputs_scientific` bundles were trained with
+`scikit-learn==1.7.2`;
 loading them with a different scikit-learn version can produce compatibility
 warnings or different behavior.
 
@@ -51,13 +52,13 @@ python -m stress_benchmark.cli scan-offsets --data-dir D:\IntroAI
 Extract combined features:
 
 ```powershell
-python -m stress_benchmark.cli extract --data-dir D:\IntroAI --out-dir D:\IntroAI\outputs --survey-offset auto
+python -m stress_benchmark.cli extract --data-dir D:\IntroAI --out-dir D:\IntroAI\StressDetector\outputs --survey-offset auto
 ```
 
 Run the benchmark:
 
 ```powershell
-python -m stress_benchmark.cli benchmark --data-dir D:\IntroAI --out-dir D:\IntroAI\outputs --survey-offset auto --task binary --protocol groupkfold --models brf,rf,extratrees,knn,gnb,xgb,lgbm
+python -m stress_benchmark.cli benchmark --data-dir D:\IntroAI --out-dir D:\IntroAI\StressDetector\outputs --survey-offset auto --task binary --protocol groupkfold --models rf,extratrees,xgb,lgbm,knn,gnb
 ```
 
 For binary tasks, class cap `150` and threshold tuning by balanced accuracy are enabled
@@ -66,19 +67,19 @@ by default. Use `--no-class-cap` or `--no-threshold-tuning` only for ablation.
 Run the optional tuning/ablation grid:
 
 ```powershell
-python -m stress_benchmark.cli benchmark --data-dir D:\IntroAI --out-dir D:\IntroAI\outputs --survey-offset auto --task binary --protocol groupkfold --models brf,rf,extratrees,knn,gnb,xgb,lgbm --class-cap-grid 100,150,250 --feature-k-grid 200,300,all --threshold-metric-grid balanced_accuracy,macro_f1,balanced_accuracy_recall_floor --source-balance source_class
+python -m stress_benchmark.cli benchmark --data-dir D:\IntroAI --out-dir D:\IntroAI\StressDetector\outputs --survey-offset auto --task binary --protocol groupkfold --models rf,extratrees,xgb,lgbm,knn,gnb --class-cap-grid 100,150,250 --feature-k-grid 200,300,all --threshold-metric-grid balanced_accuracy,macro_f1,balanced_accuracy_recall_floor --source-balance source_class
 ```
 
 For the stricter scientific setting, use leave-one-subject-out:
 
 ```powershell
-python -m stress_benchmark.cli benchmark --data-dir D:\IntroAI --out-dir D:\IntroAI\outputs --survey-offset auto --task stress3 --protocol loso
+python -m stress_benchmark.cli benchmark --data-dir D:\IntroAI --out-dir D:\IntroAI\StressDetector\outputs --survey-offset auto --task stress3 --protocol loso
 ```
 
 Train deployable backend bundles after feature extraction/benchmarking:
 
 ```powershell
-python -m stress_benchmark.cli train-final --data-dir D:\IntroAI --out-dir D:\IntroAI\outputs --task binary --models brf,rf,extratrees,knn,gnb,xgb,lgbm
+python -m stress_benchmark.cli train-final --data-dir D:\IntroAI --out-dir D:\IntroAI\StressDetector\outputs --task binary --models rf,extratrees,xgb,lgbm,knn,gnb
 ```
 
 Backend loading example:
@@ -87,8 +88,8 @@ Backend loading example:
 import pandas as pd
 from stress_benchmark.deploy import load_bundle, predict_feature_frame
 
-bundle = load_bundle(r"D:\IntroAI\outputs\models\binary_best_model.joblib")
-features = pd.read_csv(r"D:\IntroAI\outputs\features_combined.csv.gz").head(10)
+bundle = load_bundle(r"D:\IntroAI\StressDetector\outputs\models\binary_best_model.joblib")
+features = pd.read_csv(r"D:\IntroAI\StressDetector\outputs\features_combined.csv.gz").head(10)
 predictions = predict_feature_frame(bundle, features)
 ```
 
@@ -104,12 +105,32 @@ The benchmark writes:
 - `outputs/models/<task>_best_model.joblib`: copy of the best bundle selected from benchmark weighted F1 when available.
 - `outputs/models/manifest_<task>.json`: deployment manifest.
 
-Current binary deploy bundles:
+Current deploy bundles:
 
-- Combined WESAD+nurse binary: `D:\IntroAI\outputs\models\binary_best_model.joblib`
+- Latest scientific combined binary:
+  `D:\IntroAI\StressDetector\outputs_scientific\models\binary_best_model.joblib`
+  uses Random Forest with threshold `0.79`.
+- Latest scientific combined 3-class:
+  `D:\IntroAI\StressDetector\outputs_scientific\models\stress3_best_model.joblib`
+  uses LightGBM.
+- Latest scientific nurse-only binary:
+  `D:\IntroAI\StressDetector\outputs_scientific\nurse_binary\models\binary_best_model.joblib`
+  uses LightGBM with threshold `0.45`.
+
+- Combined WESAD+nurse binary: `D:\IntroAI\StressDetector\outputs\models\binary_best_model.joblib`
   uses ExtraTrees with threshold `0.70`.
-- Nurse-only binary: `D:\IntroAI\outputs\nurse_binary\models\binary_best_model.joblib`
+- Nurse-only binary: `D:\IntroAI\StressDetector\outputs\nurse_binary\models\binary_best_model.joblib`
   uses ExtraTrees with threshold `0.83`.
+
+Earlier WESAD HR/IBI rerun:
+
+- `D:\IntroAI\StressDetector\outputs_hribi\models\binary_best_model.joblib`
+  uses LightGBM with threshold `0.88`, selected by benchmark weighted F1.
+  This bundle uses WESAD `HR.csv`/`IBI.csv` from `S*_E4_Data.zip` in addition
+  to the original wrist `.pkl` ACC/BVP/EDA/TEMP streams.
+- For highest balanced accuracy in this rerun, use
+  `D:\IntroAI\StressDetector\outputs_hribi\models\binary_extratrees.joblib`
+  with threshold `0.78`.
 
 ## Methodology
 

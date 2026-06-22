@@ -80,11 +80,21 @@ def add_personal_baseline_features(df: pd.DataFrame, baseline_minutes: int = 10)
         for col in feature_cols:
             base_value = med.get(col, np.nan)
             scale_value = scale.get(col, 1.0)
+            if np.isfinite(base_value):
+                scale_floor = max(abs(float(base_value)) * 0.01, 1e-3)
+            else:
+                scale_floor = 1e-3
+            if not np.isfinite(scale_value) or float(scale_value) < scale_floor:
+                scale_value = scale_floor
+            ratio_denominator = max(abs(float(base_value)) if np.isfinite(base_value) else 0.0, scale_floor)
+            ratio_sign = np.sign(float(base_value)) if np.isfinite(base_value) and abs(float(base_value)) >= scale_floor else 1.0
             derived[f"{col}_delta_base"] = group[col] - base_value
             derived[f"{col}_ratio_base"] = (
-                (group[col] + 1e-8) / (base_value + 1e-8) if np.isfinite(base_value) else np.nan
+                np.clip(group[col] / (ratio_sign * ratio_denominator + 1e-8), -100.0, 100.0)
+                if np.isfinite(base_value)
+                else np.nan
             )
-            derived[f"{col}_z_personal"] = (group[col] - base_value) / (scale_value + 1e-8)
+            derived[f"{col}_z_personal"] = np.clip((group[col] - base_value) / (scale_value + 1e-8), -100.0, 100.0)
         derived["baseline_quality_n"] = int(len(base))
         derived_frame = pd.DataFrame(derived, index=group.index)
         frames.append(pd.concat([group, derived_frame], axis=1))

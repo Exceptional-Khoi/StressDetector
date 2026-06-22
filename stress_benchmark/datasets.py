@@ -26,6 +26,13 @@ WESAD_WRIST_FS = {
     "TEMP": 4.0,
 }
 
+WESAD_SIGNAL_MAP = {
+    "ACC": ("acc", WESAD_WRIST_FS["ACC"]),
+    "BVP": ("bvp", WESAD_WRIST_FS["BVP"]),
+    "EDA": ("eda", WESAD_WRIST_FS["EDA"]),
+    "TEMP": ("temp", WESAD_WRIST_FS["TEMP"]),
+}
+
 
 def normalize_subject_id(value: object) -> str:
     if value is None:
@@ -46,6 +53,110 @@ def mode_and_purity(values: np.ndarray) -> Tuple[Optional[int], float]:
     counts = Counter(arr.astype(int).tolist())
     label, count = counts.most_common(1)[0]
     return int(label), float(count / arr.size)
+
+
+def _find_matching_offset_samples(raw_values: np.ndarray, pkl_values: np.ndarray) -> Optional[int]:
+    raw = np.asarray(raw_values, dtype=float)
+    pkl = np.asarray(pkl_values, dtype=float)
+    if raw.ndim == 1:
+        raw = raw.reshape(-1, 1)
+    if pkl.ndim == 1:
+        pkl = pkl.reshape(-1, 1)
+    if raw.size == 0 or pkl.size == 0 or raw.shape[1] < pkl.shape[1]:
+        return None
+
+    n_cols = pkl.shape[1]
+    n_match = min(256, len(pkl), len(raw))
+    if n_match < 8:
+        return None
+    needle = pkl[:n_match, :n_cols]
+    first = needle[0]
+    candidate_mask = np.all(np.isclose(raw[:, :n_cols], first, rtol=0.0, atol=1e-10), axis=1)
+    candidates = np.flatnonzero(candidate_mask)
+    for start_idx in candidates:
+        end_idx = int(start_idx) + n_match
+        if end_idx > len(raw):
+            continue
+        if np.allclose(raw[int(start_idx) : end_idx, :n_cols], needle, rtol=0.0, atol=1e-10):
+            return int(start_idx)
+    return None
+
+
+def _wesad_pkl_offset_sec(record_signals: Dict[str, Tuple[np.ndarray, float]], wrist: Dict[str, np.ndarray]) -> Optional[float]:
+    offsets: Dict[str, float] = {}
+    for pkl_name, (signal_name, fs) in WESAD_SIGNAL_MAP.items():
+        if signal_name not in record_signals or pkl_name not in wrist:
+            continue
+        raw_values, raw_fs = record_signals[signal_name]
+        if not np.isclose(float(raw_fs), fs):
+            continue
+        offset_samples = _find_matching_offset_samples(raw_values, np.asarray(wrist[pkl_name], dtype=float))
+        if offset_samples is not None:
+            offsets[signal_name] = float(offset_samples / raw_fs)
+    # HR and IBI are derived from the E4 PPG stream, so BVP alignment is the
+    # most appropriate reference when it is available.
+    if "bvp" in offsets:
+        return offsets["bvp"]
+    if offsets:
+        return float(np.median(list(offsets.values())))
+    return None
+
+
+def _crop_signal(values: np.ndarray, fs: float, start_sec: float, duration_sec: float) -> np.ndarray:
+    arr = np.asarray(values, dtype=float)
+    expected_len = max(1, int(round(duration_sec * fs)))
+    start_idx = max(0, int(round(start_sec * fs)))
+    end_idx = start_idx + expected_len
+    if start_idx >= len(arr):
+        pad_shape = (expected_len,) + arr.shape[1:]
+        return np.full(pad_shape, np.nan)
+    cropped = arr[start_idx : min(end_idx, len(arr))]
+    if len(cropped) < expected_len:
+        pad_shape = (expected_len - len(cropped),) + arr.shape[1:]
+        cropped = np.concatenate([cropped, np.full(pad_shape, np.nan)], axis=0)
+    return cropped
+
+
+def _crop_events(values: np.ndarray, start_sec: float, duration_sec: float) -> np.ndarray:
+    events = np.asarray(values, dtype=float)
+    if events.ndim != 2 or events.shape[1] < 2:
+        return np.empty((0, 2), dtype=float)
+    end_sec = start_sec + duration_sec
+    times = events[:, 0]
+    mask = np.isfinite(times) & (times >= start_sec) & (times < end_sec)
+    cropped = events[mask, :2].copy()
+    if cropped.size:
+        cropped[:, 0] = cropped[:, 0] - start_sec
+    return cropped
+
+
+def _read_wesad_e4_heart_signals(
+    zf: zipfile.ZipFile,
+    subject_id: str,
+    wrist: Dict[str, np.ndarray],
+    duration_sec: float,
+) -> Dict[str, Tuple[np.ndarray, float]]:
+    e4_name = f"WESAD/{subject_id}/{subject_id}_E4_Data.zip"
+    try:
+        record = read_e4_zip_bytes(subject_id, subject_id, zf.read(e4_name))
+    except KeyError:
+        return {}
+    if record is None:
+        return {}
+    offset_sec = _wesad_pkl_offset_sec(record.signals, wrist)
+    if offset_sec is None:
+        return {}
+
+    extra: Dict[str, Tuple[np.ndarray, float]] = {}
+    for signal_name in ("hr", "ibi", "ibi_events"):
+        if signal_name not in record.signals:
+            continue
+        values, fs = record.signals[signal_name]
+        if signal_name == "ibi_events":
+            extra[signal_name] = (_crop_events(values, offset_sec, duration_sec), float(fs))
+        else:
+            extra[signal_name] = (_crop_signal(values, float(fs), offset_sec, duration_sec), float(fs))
+    return extra
 
 
 def build_wesad_features(config: ExtractionConfig) -> pd.DataFrame:
@@ -72,6 +183,7 @@ def build_wesad_features(config: ExtractionConfig) -> pd.DataFrame:
                 "temp": (np.asarray(wrist["TEMP"], dtype=float), WESAD_WRIST_FS["TEMP"]),
             }
             duration = len(labels) / WESAD_LABEL_FS
+            signals.update(_read_wesad_e4_heart_signals(zf, subject_id, wrist, duration))
             start = 0.0
             while start + config.window_sec <= duration + 1e-6:
                 end = start + config.window_sec
@@ -215,7 +327,12 @@ def choose_best_survey_offset(data_dir: Path) -> float:
     return float(scan.iloc[0]["survey_offset_hours"])
 
 
-def _label_nurse_windows(features: pd.DataFrame, intervals: pd.DataFrame, min_overlap: float) -> pd.DataFrame:
+def _label_nurse_windows(
+    features: pd.DataFrame,
+    intervals: pd.DataFrame,
+    min_overlap: float,
+    boundary_margin_sec: float = 0.0,
+) -> pd.DataFrame:
     if features.empty or intervals.empty:
         return features
     out = features.copy()
@@ -241,7 +358,12 @@ def _label_nurse_windows(features: pd.DataFrame, intervals: pd.DataFrame, min_ov
         best_label = np.nan
         best_overlap = 0.0
         for _, interval in candidates.iterrows():
-            overlap = max(0.0, min(end_ts, interval["survey_end_ts"]) - max(start_ts, interval["survey_start_ts"]))
+            interval_start = float(interval["survey_start_ts"]) + max(float(boundary_margin_sec), 0.0)
+            interval_end = float(interval["survey_end_ts"]) - max(float(boundary_margin_sec), 0.0)
+            if interval_end <= interval_start:
+                interval_start = float(interval["survey_start_ts"])
+                interval_end = float(interval["survey_end_ts"])
+            overlap = max(0.0, min(end_ts, interval_end) - max(start_ts, interval_start))
             ratio = overlap / max(end_ts - start_ts, 1e-8)
             if ratio > best_overlap:
                 best_overlap = ratio
@@ -288,7 +410,12 @@ def build_nurse_features(config: ExtractionConfig) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     features = pd.concat(frames, ignore_index=True)
-    features = _label_nurse_windows(features, intervals, config.min_label_overlap)
+    features = _label_nurse_windows(
+        features,
+        intervals,
+        config.min_label_overlap,
+        config.label_boundary_margin_sec,
+    )
     features["survey_offset_hours"] = offset
     if not config.keep_unlabeled:
         features = features[features["target3"].notna()].copy()
@@ -308,4 +435,3 @@ def build_combined_features(config: ExtractionConfig) -> pd.DataFrame:
     combined = pd.concat(frames, ignore_index=True, sort=False)
     combined = add_personal_baseline_features(combined, baseline_minutes=config.baseline_minutes)
     return combined
-

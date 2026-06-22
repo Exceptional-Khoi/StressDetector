@@ -1,171 +1,151 @@
-# Results And Deployment Notes
+# Current Results And Deployment
+
+This file reports the current scientific rerun saved under:
+
+- `D:\IntroAI\StressDetector\outputs_scientific`
+
+The active benchmark model set is exactly six algorithms for both binary and
+3-class classification:
+
+- Random Forest (`rf`)
+- ExtraTrees (`extratrees`)
+- XGBoost (`xgb`)
+- LightGBM (`lgbm`)
+- k-NN (`knn`)
+- Gaussian Naive Bayes (`gnb`)
+
+No additional algorithms are registered in the current benchmark.
 
 ## Extracted Dataset
 
-Feature extraction was run on both datasets without row subsampling:
+Feature extraction was run on both datasets with the stricter scientific
+preprocessing:
 
 - WESAD: 526 labeled windows.
-- Nurse wearable dataset: 4,323 labeled windows.
-- Total: 4,849 windows.
-- Feature table columns: 717.
-- Model input features after excluding metadata/labels/timing columns: 693.
+- Nurse wearable dataset: 4,019 labeled windows after stricter label cleaning.
+- Total: 4,545 labeled windows.
+- Feature table columns: 2,281.
+- Model input features after excluding metadata/labels/timing columns: 2,257.
 
 Unified `stress3` label distribution:
 
-- `0`: 1,320 windows.
-- `1`: 244 windows.
-- `2`: 3,285 windows.
+- `0`: 1,260 windows.
+- `1`: 221 windows.
+- `2`: 3,064 windows.
 
-Nurse survey offset auto-selection selected `-4` hours as the best match between
-sensor session timestamps and survey intervals.
+The nurse survey offset auto-selection selected `-4` hours as the best match
+between sensor session timestamps and survey intervals.
 
-## Benchmark Protocol
+## Current Combined Binary Benchmark
 
-The benchmark uses subject-grouped folds to reduce subject leakage. For binary tasks,
-imbalance handling is applied inside each training fold only:
-
-- per-subject per-class cap: 150 windows,
-- SMOTE for regular models,
-- Balanced Random Forest with internal balancing instead of external SMOTE,
-- sigmoid holdout calibration,
-- threshold tuning on the calibration split using balanced accuracy.
-
-The test fold is not capped, resampled, calibrated on, or used for threshold selection.
-
-Best current combined 3-class model by weighted F1 after preprocessing and feature updates:
+Protocol: subject-grouped folds, WESAD+nurse combined, nurse-only
+calibration/threshold tuning, per-subject per-class cap 150, SMOTE inside each
+training fold only, sigmoid holdout calibration, threshold grid over balanced
+accuracy, macro F1, and recall-floor balanced accuracy.
 
 | Model | Accuracy | Balanced Accuracy | Macro F1 | Weighted F1 |
 |---|---:|---:|---:|---:|
-| ExtraTrees | 0.7377 | 0.4997 | 0.4773 | 0.7051 |
-| Random Forest | 0.7163 | 0.4673 | 0.4619 | 0.6864 |
-| XGBoost | 0.6886 | 0.4595 | 0.4254 | 0.6670 |
-| LightGBM | 0.6790 | 0.4404 | 0.4383 | 0.6534 |
+| Random Forest | 0.8102 | 0.7309 | 0.7328 | 0.8096 |
+| XGBoost | 0.7253 | 0.7103 | 0.6564 | 0.7309 |
+| LightGBM | 0.7288 | 0.7083 | 0.6502 | 0.7249 |
+| ExtraTrees | 0.7100 | 0.6998 | 0.6321 | 0.7124 |
+| k-NN | 0.6677 | 0.6985 | 0.6122 | 0.6957 |
+| Gaussian Naive Bayes | 0.4461 | 0.5615 | 0.4262 | 0.4641 |
 
-Current combined binary benchmark after imbalance handling:
+Deploy bundle:
+
+- `D:\IntroAI\StressDetector\outputs_scientific\models\binary_best_model.joblib`
+- Selected model: Random Forest.
+- Selection metric: benchmark weighted F1.
+- Final deploy threshold: `0.79`.
+
+## Current Combined 3-Class Benchmark
+
+Protocol: subject-grouped folds, WESAD+nurse combined, same feature set and
+calibration policy. Binary threshold tuning is not used for 3-class prediction.
 
 | Model | Accuracy | Balanced Accuracy | Macro F1 | Weighted F1 |
 |---|---:|---:|---:|---:|
-| ExtraTrees | 0.7032 | 0.6945 | 0.6549 | 0.7026 |
-| LightGBM | 0.6680 | 0.5903 | 0.5981 | 0.6712 |
-| XGBoost | 0.6280 | 0.5557 | 0.5376 | 0.6203 |
-| k-NN | 0.5959 | 0.6074 | 0.5446 | 0.5789 |
-| Balanced Random Forest | 0.5728 | 0.5946 | 0.5252 | 0.5704 |
-| Random Forest | 0.5855 | 0.5864 | 0.5163 | 0.5665 |
-| Gaussian Naive Bayes | 0.5586 | 0.5039 | 0.4397 | 0.5213 |
+| LightGBM | 0.7667 | 0.6234 | 0.6079 | 0.7531 |
+| Random Forest | 0.7688 | 0.6141 | 0.5889 | 0.7506 |
+| ExtraTrees | 0.7543 | 0.6109 | 0.5773 | 0.7400 |
+| XGBoost | 0.7510 | 0.6067 | 0.5850 | 0.7394 |
+| k-NN | 0.6664 | 0.5880 | 0.4420 | 0.6799 |
+| Gaussian Naive Bayes | 0.6508 | 0.4000 | 0.3062 | 0.5267 |
 
-Current nurse-only binary benchmark after imbalance handling:
+Deploy bundle:
+
+- `D:\IntroAI\StressDetector\outputs_scientific\models\stress3_best_model.joblib`
+- Selected model: LightGBM.
+- Selection metric: benchmark weighted F1.
+- Final deploy threshold: not applicable for 3-class.
+
+## Current Nurse-Only Binary Benchmark
+
+This is the source-specific deployment/reference benchmark for the nurse dataset
+only. It uses the same six-model set and binary imbalance handling.
 
 | Model | Accuracy | Balanced Accuracy | Macro F1 | Weighted F1 |
 |---|---:|---:|---:|---:|
-| ExtraTrees | 0.7017 | 0.6327 | 0.5778 | 0.7004 |
-| Random Forest | 0.6227 | 0.5329 | 0.4848 | 0.6235 |
-| LightGBM | 0.5693 | 0.5143 | 0.4691 | 0.5832 |
-| XGBoost | 0.5890 | 0.5233 | 0.4665 | 0.5822 |
-| Balanced Random Forest | 0.5698 | 0.5577 | 0.4615 | 0.5574 |
-| k-NN | 0.5039 | 0.5825 | 0.4564 | 0.4773 |
-| Gaussian Naive Bayes | 0.4043 | 0.4942 | 0.3161 | 0.3464 |
+| LightGBM | 0.7391 | 0.4997 | 0.4927 | 0.7187 |
+| XGBoost | 0.7145 | 0.5014 | 0.5075 | 0.7141 |
+| ExtraTrees | 0.7217 | 0.5152 | 0.5039 | 0.7074 |
+| Random Forest | 0.6674 | 0.4821 | 0.4806 | 0.6737 |
+| k-NN | 0.6049 | 0.6252 | 0.5393 | 0.6557 |
+| Gaussian Naive Bayes | 0.5940 | 0.6128 | 0.5102 | 0.6425 |
 
-Source-specific reference binary benchmark:
+Deploy bundle:
 
-| Source | Best Model | Accuracy | Balanced Accuracy | Macro F1 | Weighted F1 |
-|---|---|---:|---:|---:|---:|
-| WESAD | ExtraTrees | 0.9388 | 0.9115 | 0.9175 | 0.9344 |
-| Nurse, before binary imbalance update | ExtraTrees | 0.7487 | 0.5589 | 0.5140 | 0.6958 |
-| Nurse, after binary imbalance update | ExtraTrees | 0.7017 | 0.6327 | 0.5778 | 0.7004 |
+- `D:\IntroAI\StressDetector\outputs_scientific\nurse_binary\models\binary_best_model.joblib`
+- Selected model: LightGBM by benchmark weighted F1.
+- Final deploy threshold: `0.45`.
 
-The nurse-only update improves balanced accuracy and macro F1 substantially. Combined
-binary balanced accuracy changes slightly upward, while weighted F1 drops because the
-tuned threshold is less biased toward the majority stress class.
+If balanced accuracy is preferred over weighted F1 for nurse-only monitoring,
+k-NN is the strongest current benchmark model, but the saved `best_model` follows
+the project-wide weighted-F1 selection rule.
 
-Additional ablations were implemented and tested:
+## Scientific Preprocessing And Improvements
 
-| Ablation | Scope | Best Observed Effect |
-|---|---|---|
-| ExtraTrees top-k feature selection | Nurse-only ExtraTrees | Accuracy rose to 0.7121, but balanced accuracy dropped to 0.5880 and macro F1 to 0.5420. Not used for deploy. |
-| Class-cap grid `50,100,150,250,none` | Nurse-only ExtraTrees | Balanced accuracy dropped to 0.6106 versus fixed cap 150 at 0.6327. Not used for deploy. |
-| Threshold-metric grid | Nurse-only ExtraTrees | Same result as balanced-accuracy threshold tuning. Safe, but no gain. |
-| Source-balanced source/class training | Combined ExtraTrees | Balanced accuracy dropped to 0.6678 versus 0.6945 without source balancing. Kept as ablation option, not default deploy. |
+The current rerun includes:
 
-The deployable binary bundles therefore keep the empirically best conservative setting:
-all 693 features, per-subject class cap 150, SMOTE/internal balancing, sigmoid holdout
-calibration, and balanced-accuracy threshold tuning.
+- event-based IBI/HRV features computed directly from `IBI.csv` events,
+- direct E4 HR plus BVP-derived heart features,
+- BVP/IBI/HR signal-quality and consistency features,
+- 60s physiological windows plus trailing 120s and 300s summaries,
+- robust personalized baseline deltas/ratios/z-scores with clipping,
+- ACC-based physical-activity context features,
+- stricter nurse label cleaning with `min_label_overlap = 0.70` and 60s survey
+  boundary margin,
+- subject-grouped evaluation to reduce subject leakage,
+- temporal smoothing and rule-based decision support after classifier prediction.
 
-## Preprocessing Audit Fixes
+## Deploy Bundle Contents
 
-The following issues were found and fixed:
-
-- Removed `window_start_sec`, `window_end_sec`, `window_duration_sec`, and derived timing columns from model input. These can leak WESAD protocol order.
-- Removed survey-offset derived columns from model input.
-- Corrected Empatica E4 HR alignment in the nurse dataset. `HR.csv` starts 10 seconds after ACC/EDA/BVP/TEMP in all 609 sessions.
-- Removed label-dependent nurse baseline selection. Nurse baseline now uses the first available calibration windows, not low-stress labels.
-- Added unit audit: ACC is normalized from Empatica `1/64 g`; EDA/TEMP/BVP are compatible across the common E4 modalities; HR/IBI are nurse-specific and WESAD-compatible HRV is derived from BVP.
-- Added calibrated probabilities using sigmoid holdout calibration. SMOTE is applied to model-training data only, not calibration data.
-- Added binary per-subject per-class cap, Balanced Random Forest, and threshold tuning. The prediction and deploy code now use the tuned threshold instead of raw probability argmax.
-- Added optional train-fold feature-selection grids, class-cap grids, threshold-metric grids, and source-balanced training ablations.
-- Fixed binary decision-support handling so binary `pred_label = 1` is treated as stress, not as only a moderate 3-class state.
-
-Checks that passed:
-
-- WESAD `.pkl` wrist signal durations match label duration for sampled subjects.
-- Nurse ACC/EDA/BVP/TEMP starts align at session start; HR offset is consistently 10 seconds and is now padded/aligned.
-- Nurse survey label overlap is high after matching: mean overlap around 0.993 on labeled windows.
-- Model feature list contains no `target`, `label`, `source`, `subject`, `session`, `group`, `window`, or `offset` columns.
-- Prediction CSV threshold checks pass: binary `pred_label` matches stored fold threshold for every model/fold.
-- Deploy bundles load and apply stored selected-feature indices, threshold, and decision-support logic.
-
-## Saved Model Bundles
-
-The deployable bundles are saved in `D:\IntroAI\outputs\models`:
-
-- `stress3_best_model.joblib`: current best combined 3-class model, ExtraTrees.
-- `binary_best_model.joblib`: current best combined binary model, ExtraTrees, deploy threshold `0.70`.
-- `D:\IntroAI\outputs\nurse_binary\models\binary_best_model.joblib`: nurse-only binary model, ExtraTrees, deploy threshold `0.83`.
-- `D:\IntroAI\outputs\wesad_binary\models\binary_best_model.joblib`: WESAD-only lab/reference binary model.
-- `stress3_extratrees.joblib`
-- `stress3_rf.joblib`
-- `stress3_xgb.joblib`
-- `stress3_lgbm.joblib`
-- `manifest_stress3.json`
-- `manifest_binary.json`
-- `D:\IntroAI\outputs\nurse_binary\models\manifest_binary.json`
-
-Each `.joblib` bundle contains:
+Each `.joblib` bundle stores:
 
 - fitted model,
 - median imputer,
 - optional scaler,
 - label encoder,
 - exact feature column list,
-- selected feature indices/columns when feature selection is enabled,
+- selected feature indices/columns,
 - label semantics,
 - baseline policy metadata,
-- class-cap/source-balance/resampling/calibration metadata,
-- tuned binary decision threshold when applicable,
-- decision-support states.
+- signal unit metadata,
+- class-cap/resampling/calibration settings,
+- binary decision threshold when applicable,
+- decision-support metadata.
 
-## Backend Usage
+The current bundles were trained with `scikit-learn==1.7.2`; use the same
+version in the backend environment when loading them.
+
+Backend loading example:
 
 ```python
 import pandas as pd
 from stress_benchmark.deploy import load_bundle, predict_feature_frame
 
-bundle = load_bundle(r"D:\IntroAI\outputs\models\binary_best_model.joblib")
-features = pd.read_csv(r"D:\IntroAI\outputs\features_combined.csv.gz").head(10)
+bundle = load_bundle(r"D:\IntroAI\StressDetector\outputs_scientific\models\binary_best_model.joblib")
+features = pd.read_csv(r"D:\IntroAI\StressDetector\outputs_scientific\features_combined.csv.gz").head(10)
 predictions = predict_feature_frame(bundle, features)
 ```
-
-Backend input must contain the same 693 model feature columns. In production, generate
-those columns from a 60-second sensor window and the user's 5-10 minute personal
-baseline before calling `predict_feature_frame`.
-
-Deployment environment note: the current saved bundles were trained with
-`scikit-learn==1.9.0`. Use the same scikit-learn version in the backend, or retrain
-the bundles inside the backend environment before deploying.
-
-The output includes:
-
-- `pred_label`
-- `confidence`
-- `proba_0`, `proba_1` for binary models; `proba_2` is also present for 3-class models
-- `alert_state`
-- `recommendation`

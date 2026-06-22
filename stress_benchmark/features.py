@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, Mapping, Tuple
+from typing import Dict, Iterable, Mapping, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -126,22 +126,49 @@ def derived_hr_from_peaks(values: Iterable[float], fs: float) -> Dict[str, float
     arr = as_1d(values)
     peak_idx = _bvp_peak_indices(arr, fs)
     if peak_idx.size < 3:
-        return {}
-    intervals = np.diff(peak_idx) / fs
-    intervals = intervals[(intervals >= 0.30) & (intervals <= 2.00)]
+        return {
+            "bvp_peak_count": int(peak_idx.size),
+            "bvp_peak_rate": float(peak_idx.size / max(arr.size / fs, EPS)) if fs and fs > 0 else np.nan,
+            "bvp_rr_valid_ratio": 0.0,
+        }
+    raw_intervals = np.diff(peak_idx) / fs
+    intervals = raw_intervals[(raw_intervals >= 0.30) & (raw_intervals <= 2.00)]
+    valid_ratio = float(intervals.size / max(raw_intervals.size, 1))
     if intervals.size < 2:
-        return {}
+        return {
+            "bvp_peak_count": int(peak_idx.size),
+            "bvp_peak_rate": float(peak_idx.size / max(arr.size / fs, EPS)),
+            "bvp_rr_valid_ratio": valid_ratio,
+        }
     bpm = 60.0 / intervals
     out = basic_stats("bvp_derived_hr", bpm)
     out["bvp_peak_count"] = int(peak_idx.size)
     out["bvp_peak_rate"] = float(peak_idx.size / max(arr.size / fs, EPS))
+    out["bvp_rr_valid_ratio"] = valid_ratio
+    out["bvp_rr_cv"] = float(np.std(intervals) / (np.mean(intervals) + EPS))
     out.update(hrv_features_from_intervals("bvp_hrv", intervals))
     return out
 
 
-def ibi_hrv_features(values: Iterable[float]) -> Dict[str, float]:
+def ibi_hrv_features(values: Iterable[float], duration_sec: float | None = None) -> Dict[str, float]:
     intervals = as_1d(values)
-    return hrv_features_from_intervals("ibi_hrv", intervals)
+    raw_count = int(intervals.size)
+    valid = intervals[(intervals >= 0.30) & (intervals <= 2.00)]
+    out: Dict[str, float] = {
+        "ibi_count": raw_count,
+        "ibi_valid_count": int(valid.size),
+        "ibi_valid_ratio": float(valid.size / max(raw_count, 1)),
+    }
+    if duration_sec is not None and np.isfinite(duration_sec) and duration_sec > 0:
+        out["ibi_rate"] = float(valid.size / duration_sec)
+        out["ibi_coverage_ratio"] = float(min(np.sum(valid) / max(duration_sec, EPS), 1.0)) if valid.size else 0.0
+    if valid.size == 0:
+        out["ibi_missing_ratio"] = 1.0
+        return out
+    out["ibi_missing_ratio"] = float(1.0 - valid.size / max(raw_count, 1))
+    out.update(basic_stats("ibi", valid))
+    out.update(hrv_features_from_intervals("ibi_hrv", valid))
+    return out
 
 
 def eda_decomposition_features(values: Iterable[float], fs: float) -> Dict[str, float]:
@@ -233,7 +260,44 @@ def signal_window(signals: Mapping[str, Tuple[np.ndarray, float]], name: str, st
     return np.asarray(values[start_idx:end_idx]), fs
 
 
-def window_features(signals: Mapping[str, Tuple[np.ndarray, float]], start_sec: float, end_sec: float) -> Dict[str, float]:
+def event_window(signals: Mapping[str, Tuple[np.ndarray, float]], name: str, start_sec: float, end_sec: float) -> np.ndarray:
+    if name not in signals:
+        return np.empty((0, 2), dtype=float)
+    values, _ = signals[name]
+    events = np.asarray(values, dtype=float)
+    if events.ndim != 2 or events.shape[1] < 2:
+        return np.empty((0, 2), dtype=float)
+    times = events[:, 0]
+    mask = np.isfinite(times) & (times >= start_sec) & (times < end_sec)
+    return events[mask, :2]
+
+
+def _add_multiscale_features(
+    out: Dict[str, float],
+    signals: Mapping[str, Tuple[np.ndarray, float]],
+    end_sec: float,
+    windows_sec: Sequence[int],
+) -> None:
+    for window_sec in windows_sec:
+        if window_sec <= 0:
+            continue
+        multi_start = max(0.0, float(end_sec) - float(window_sec))
+        if end_sec - multi_start < 10.0:
+            continue
+        multi = window_features(signals, multi_start, end_sec, multiscale_windows=())
+        suffix = f"_w{int(window_sec)}"
+        for key, value in multi.items():
+            if key.startswith("window_"):
+                continue
+            out[f"{key}{suffix}"] = value
+
+
+def window_features(
+    signals: Mapping[str, Tuple[np.ndarray, float]],
+    start_sec: float,
+    end_sec: float,
+    multiscale_windows: Sequence[int] = (120, 300),
+) -> Dict[str, float]:
     out: Dict[str, float] = {
         "window_start_sec": float(start_sec),
         "window_end_sec": float(end_sec),
@@ -248,7 +312,11 @@ def window_features(signals: Mapping[str, Tuple[np.ndarray, float]], start_sec: 
         values, fs = signal_window(signals, name, start_sec, end_sec)
         if values.size == 0:
             continue
-        flat = as_1d(values)
+        raw = np.asarray(values, dtype=float).reshape(-1)
+        flat = as_1d(raw)
+        out[f"{prefix}_valid_ratio"] = float(flat.size / max(raw.size, 1))
+        if prefix == "ibi" and "ibi_events" in signals:
+            continue
         out.update(basic_stats(prefix, flat))
         out[f"{prefix}_slope"] = slope(flat, float(fs)) if np.isfinite(fs) else np.nan
         if prefix == "eda":
@@ -262,5 +330,21 @@ def window_features(signals: Mapping[str, Tuple[np.ndarray, float]], start_sec: 
         if prefix == "bvp":
             out.update(derived_hr_from_peaks(flat, float(fs)))
         if prefix == "ibi":
-            out.update(ibi_hrv_features(flat))
+            out.update(ibi_hrv_features(flat, end_sec - start_sec))
+
+    ibi_events = event_window(signals, "ibi_events", start_sec, end_sec)
+    if ibi_events.size:
+        out.update(ibi_hrv_features(ibi_events[:, 1], end_sec - start_sec))
+
+    if "hr_mean" in out and "ibi_hrv_hr_mean" in out:
+        diff = float(abs(out["hr_mean"] - out["ibi_hrv_hr_mean"]))
+        out["hr_ibi_consistency_abs_diff"] = diff
+        out["hr_ibi_consistency_ratio"] = float(diff / (out["hr_mean"] + EPS))
+    if "bvp_derived_hr_mean" in out and "ibi_hrv_hr_mean" in out:
+        diff = float(abs(out["bvp_derived_hr_mean"] - out["ibi_hrv_hr_mean"]))
+        out["bvp_ibi_consistency_abs_diff"] = diff
+        out["bvp_ibi_consistency_ratio"] = float(diff / (out["bvp_derived_hr_mean"] + EPS))
+
+    if multiscale_windows:
+        _add_multiscale_features(out, signals, end_sec, multiscale_windows)
     return out

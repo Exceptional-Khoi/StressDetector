@@ -40,10 +40,13 @@ def apply_decision_support(df: pd.DataFrame, pred_col: str = "pred_label", confi
     states = []
     actions = []
     adjusted = []
+    temporal_scores = []
+    temporal_labels = []
 
     sort_cols = [c for c in ["source", "subject_id", "window_start_ts", "window_start_sec"] if c in out.columns]
     ordered = out.sort_values(sort_cols).copy() if sort_cols else out.copy()
     persistent_counter = {}
+    recent_stress = {}
 
     for idx, row in ordered.iterrows():
         pred = int(row[pred_col]) if pd.notna(row[pred_col]) else 0
@@ -70,6 +73,11 @@ def apply_decision_support(df: pd.DataFrame, pred_col: str = "pred_label", confi
 
         high_stress_prediction = pred >= 2 or (is_binary_task and pred >= 1)
         stress_like = high_stress_prediction or (pred >= 1 and confidence >= 0.65)
+        history = recent_stress.get(group_key, [])
+        history = (history + [1 if stress_like else 0])[-5:]
+        recent_stress[group_key] = history
+        temporal_score = float(np.mean(history)) if history else 0.0
+        temporal_label = int(temporal_score >= 0.60 or (len(history) >= 3 and sum(history[-3:]) >= 2))
         if stress_like:
             persistent_counter[group_key] = persistent_counter.get(group_key, 0) + 1
         else:
@@ -87,6 +95,10 @@ def apply_decision_support(df: pd.DataFrame, pred_col: str = "pred_label", confi
             state = "persistent_stress" if persistent_counter[group_key] >= 2 else "rising_stress"
             action = "short_break_water_slow_breathing"
             adjusted_label = 2
+        elif temporal_label and confidence >= 0.45:
+            state = "monitor_more"
+            action = "measure_more_before_alert"
+            adjusted_label = 1
         elif pred >= 1:
             state = "monitor_more"
             action = "measure_more_before_alert"
@@ -103,8 +115,12 @@ def apply_decision_support(df: pd.DataFrame, pred_col: str = "pred_label", confi
         states.append((idx, state))
         actions.append((idx, action))
         adjusted.append((idx, adjusted_label))
+        temporal_scores.append((idx, temporal_score))
+        temporal_labels.append((idx, temporal_label))
 
     out["alert_state"] = pd.Series(dict(states))
     out["recommendation"] = pd.Series(dict(actions))
     out["decision_adjusted_label"] = pd.Series(dict(adjusted))
+    out["temporal_stress_score"] = pd.Series(dict(temporal_scores))
+    out["temporal_smoothed_label"] = pd.Series(dict(temporal_labels))
     return out
