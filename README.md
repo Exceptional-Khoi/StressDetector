@@ -93,6 +93,16 @@ features = pd.read_csv(r"D:\IntroAI\StressDetector\outputs\features_combined.csv
 predictions = predict_feature_frame(bundle, features)
 ```
 
+Run the local demo API:
+
+```powershell
+python -m uvicorn stress_benchmark.app_api:app --host 127.0.0.1 --port 8000
+```
+
+Then open `http://127.0.0.1:8000/`. By default the API loads
+`outputs_scientific/models/binary_best_model.joblib`. To deploy another bundle,
+set `STRESS_MODEL_PATH` before starting the server.
+
 ## Outputs
 
 The benchmark writes:

@@ -150,7 +150,7 @@ Recommended order:
 3. Run `groupkfold` for fast development.
 4. Run `loso` for final subject-independent reporting.
 5. Report metrics both overall and by source.
-6. Apply class caps, SMOTE/internal balancing, calibration, and threshold tuning inside training folds only.
+6. Apply class caps, SMOTE, calibration, and threshold tuning inside training folds only.
 7. Never split randomly by rows for final claims because adjacent windows from the same subject/session leak information.
 
 ## Known Limitations
@@ -160,3 +160,9 @@ Recommended order:
 - Nurse survey timestamps may need timezone-offset validation.
 - The decision-support layer is rule-based and should be reported separately from raw model performance.
 - Full WESAD `.pkl` extraction is memory intensive because each subject file is large.
+- The current `outputs_scientific` report uses subject-grouped folds. This is
+  acceptable for development and demo, but a paper-style final claim should also
+  include LOSO as a stricter robustness check.
+- The demo API expects a feature table generated with the same feature-extraction
+  pipeline. It does not yet accept raw E4 sensor files and recreate all 2,257
+  model input features on the fly.

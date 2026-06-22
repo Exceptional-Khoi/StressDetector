@@ -1,7 +1,7 @@
 import io
 import logging
-import os
 import math
+import os
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,8 +13,14 @@ from .deploy import load_bundle, predict_feature_frame
 from .baseline import add_personal_baseline_features
 
 # --- CONFIG ---
-MODEL_PATH       = "outputs/models/binary_best_model.joblib"
-STATIC_DIR       = Path(__file__).parent / "static"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+MODEL_PATH = Path(
+    os.getenv(
+        "STRESS_MODEL_PATH",
+        PROJECT_ROOT / "outputs_scientific" / "models" / "binary_best_model.joblib",
+    )
+)
+STATIC_DIR = Path(__file__).parent / "static"
 BASELINE_MINUTES = 10
 
 logging.basicConfig(level=logging.INFO)
@@ -47,7 +53,7 @@ def startup():
     global MODEL_BUNDLE
     try:
         MODEL_BUNDLE = load_bundle(MODEL_PATH)
-        logger.info("Model loaded successfully.")
+        logger.info("Model loaded successfully from %s.", MODEL_PATH)
     except Exception as e:
         logger.error(f"Cannot load model: {e}")
 
@@ -57,10 +63,37 @@ def _needs_baseline(df: pd.DataFrame) -> bool:
 
 
 def _sanitize(val):
-    """Đổi NaN / Inf thành None để json.dumps không bị lỗi."""
+    """Convert NaN/Inf to JSON null."""
     if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
         return None
     return val
+
+
+@app.get("/api/v1/health")
+def health():
+    return {
+        "status": "ok" if MODEL_BUNDLE is not None else "model_not_loaded",
+        "model_path": str(MODEL_PATH),
+    }
+
+
+@app.get("/api/v1/model-info")
+def model_info():
+    if MODEL_BUNDLE is None:
+        raise HTTPException(status_code=500, detail="Model not initialized")
+    training_info = MODEL_BUNDLE.get("training_info", {})
+    return {
+        "model_name": MODEL_BUNDLE.get("model_name"),
+        "task": MODEL_BUNDLE.get("task"),
+        "decision_threshold": MODEL_BUNDLE.get("decision_threshold"),
+        "n_features": len(MODEL_BUNDLE.get("feature_columns", [])),
+        "selected_features": MODEL_BUNDLE.get("n_selected_features"),
+        "calibration": MODEL_BUNDLE.get("calibration") or training_info.get("calibration"),
+        "resampling": training_info.get("resampling"),
+        "class_cap": MODEL_BUNDLE.get("class_cap") or training_info.get("class_cap"),
+        "calibration_source": training_info.get("calibration_source"),
+        "dependency_versions": MODEL_BUNDLE.get("dependency_versions"),
+    }
 
 
 # --- API ---
@@ -80,7 +113,8 @@ async def analyze_file(file: UploadFile = File(...)):
 
     logger.info(f"File received: {len(features_df)} rows, {len(features_df.columns)} cols")
 
-    # Preprocessing: tính baseline nếu CSV chưa có
+    # Add personalized baseline features if the uploaded feature table does not
+    # already contain them.
     if _needs_baseline(features_df):
         logger.info("Running add_personal_baseline_features()...")
         try:
@@ -90,13 +124,13 @@ async def analyze_file(file: UploadFile = File(...)):
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"Baseline feature error: {e}")
 
-    # Dự đoán
+    # Predict using the loaded deploy bundle.
     try:
         results_df = predict_feature_frame(MODEL_BUNDLE, features_df)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=f"Prediction error: {e}")
 
-    # Đồng nhất tên cột
+    # Normalize output column names for the frontend.
     if "decision_adjusted_label" in results_df.columns:
         results_df["adjusted_label"] = results_df["decision_adjusted_label"]
     elif "adjusted_label" not in results_df.columns:
@@ -108,7 +142,7 @@ async def analyze_file(file: UploadFile = File(...)):
     if "confidence" not in results_df.columns:
         results_df["confidence"] = 0.0
 
-    # Chỉ giữ cột frontend cần
+    # Keep only frontend-facing columns.
     output_cols = [c for c in [
         "window_start_sec", "window_start_ts",
         "pred_label", "adjusted_label", "confidence",
@@ -116,7 +150,7 @@ async def analyze_file(file: UploadFile = File(...)):
     ] if c in results_df.columns]
     output_cols += [c for c in results_df.columns if c.startswith("proba_")]
 
-    # Sanitize NaN/Inf → None (null trong JSON) để tránh ValueError
+    # Sanitize NaN/Inf to JSON null.
     records = results_df[output_cols].to_dict(orient="records")
     records = [
         {k: _sanitize(v) for k, v in row.items()}
