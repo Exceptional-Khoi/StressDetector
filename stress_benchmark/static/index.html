@@ -124,7 +124,7 @@
     /* ── Summary cards ── */
     .summary-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 12px;
       margin-bottom: 24px;
     }
@@ -207,9 +207,6 @@
     .badge-monitor  { background: #2b2107; color: var(--mid);  }
     .badge-stress   { background: #2a0e0d; color: var(--high); }
     .badge-physical { background: #1c1230; color: var(--phy);  }
-
-    .conf-bar { width: 80px; height: 6px; background: var(--border); border-radius: 3px; display: inline-block; vertical-align: middle; margin-right: 6px; }
-    .conf-fill { height: 100%; border-radius: 3px; background: var(--accent); }
   </style>
 </head>
 <body>
@@ -258,11 +255,6 @@
         <div class="sub">windows with stress signal</div>
       </div>
       <div class="stat-card">
-        <div class="label">Avg Confidence</div>
-        <div class="value" id="statConf">—</div>
-        <div class="sub">model prediction confidence</div>
-      </div>
-      <div class="stat-card">
         <div class="label">Peak State</div>
         <div class="value" id="statPeak">—</div>
         <div class="sub" id="statPeakSub">—</div>
@@ -284,12 +276,6 @@
       <div class="chart-wrap"><canvas id="stressChart"></canvas></div>
     </div>
 
-    <!-- Confidence chart -->
-    <div class="panel">
-      <div class="panel-title">Model Confidence Over Time</div>
-      <div class="chart-wrap"><canvas id="confChart"></canvas></div>
-    </div>
-
     <!-- Timeline table -->
     <div class="panel">
       <div class="panel-title">Window-by-Window Report</div>
@@ -301,7 +287,6 @@
               <th>Time (s)</th>
               <th>Stress Level</th>
               <th>State</th>
-              <th>Confidence</th>
               <th>Recommendation</th>
             </tr>
           </thead>
@@ -315,13 +300,10 @@
 
 <script>
 // ── Config ──────────────────────────────────────────────
-// Same origin (FastAPI serves this file): leave as ""
-// Same-origin API when served by FastAPI.
 const API_BASE = "";
 
 // ── State ───────────────────────────────────────────────
 let chartStress = null;
-let chartConf   = null;
 
 // ── File input ───────────────────────────────────────────
 const fileInput  = document.getElementById("fileInput");
@@ -352,7 +334,7 @@ dropZone.addEventListener("drop", e => {
 // ── Helpers ──────────────────────────────────────────────
 const STATE_META = {
   normal:                 { label: "Normal",                  cls: "normal",   badge: "badge-normal",   icon: "✅", color: "#3fb950" },
-  low_confidence_normal:  { label: "Low Confidence — Normal", cls: "normal",   badge: "badge-normal",   icon: "🔵", color: "#58a6ff" },
+  low_confidence_normal:  { label: "Normal (Uncertain)",      cls: "normal",   badge: "badge-normal",   icon: "✅", color: "#3fb950" },
   monitor_more:           { label: "Monitor Closely",         cls: "monitor",  badge: "badge-monitor",  icon: "👁️", color: "#d29922" },
   rising_stress:          { label: "Rising Stress",           cls: "stress",   badge: "badge-stress",   icon: "⚠️", color: "#f85149" },
   persistent_stress:      { label: "Persistent Stress",       cls: "stress",   badge: "badge-stress",   icon: "🔴", color: "#f85149" },
@@ -362,7 +344,7 @@ const STATE_META = {
 
 const REC_LABEL = {
   no_action:                        "No action needed — continue current activity.",
-  continue_monitoring:              "Continue monitoring — confidence is low, keep collecting data.",
+  continue_monitoring:              "Continue monitoring — keep collecting data.",
   measure_more_before_alert:        "Gathering more data before raising an alert.",
   short_break_water_slow_breathing: "Take a short break, drink water, try slow breathing.",
   stop_task_short_break_breathing_support: "Stop current task immediately. Take a break and use breathing support.",
@@ -447,53 +429,12 @@ function makeStressChart(labels, data, colors) {
   });
 }
 
-function makeConfChart(labels, data) {
-  if (chartConf) chartConf.destroy();
-  const ctx = document.getElementById("confChart").getContext("2d");
-
-  // gradient fill
-  const gradient = ctx.createLinearGradient(0, 0, 0, 200);
-  gradient.addColorStop(0, "#58a6ff30");
-  gradient.addColorStop(1, "#58a6ff00");
-
-  chartConf = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [{
-        label: "Confidence",
-        data,
-        borderColor: "#58a6ff",
-        backgroundColor: gradient,
-        pointRadius: 3,
-        borderWidth: 2,
-        fill: true,
-        tension: 0.3,
-      }],
-    },
-    options: {
-      ...CHART_DEFAULTS,
-      scales: {
-        ...CHART_DEFAULTS.scales,
-        y: { ...CHART_DEFAULTS.scales.y, min: 0, max: 1,
-          ticks: { ...CHART_DEFAULTS.scales.y.ticks, callback: v => (v * 100).toFixed(0) + "%" } },
-      },
-      plugins: {
-        ...CHART_DEFAULTS.plugins,
-        tooltip: { callbacks: { label: ctx => `Confidence: ${pct(ctx.parsed.y)}` } }
-      }
-    },
-  });
-}
-
 // ── Build results UI ──────────────────────────────────────
 function renderResults(data) {
   document.getElementById("results").style.display = "block";
 
   const n = data.length;
   const stressed = data.filter(d => d.adjusted_label >= 1).length;
-  const confs    = data.map(d => d.confidence).filter(v => isFinite(v));
-  const avgConf  = confs.length ? confs.reduce((a,b) => a+b, 0) / confs.length : NaN;
   const latest   = data[n - 1];
 
   // Severity ranking for "peak state"
@@ -506,7 +447,6 @@ function renderResults(data) {
   document.getElementById("statWindows").textContent    = n;
   document.getElementById("statDuration").textContent   = fmtTime(data[0], 0) + " – " + fmtTime(data[n-1], n-1);
   document.getElementById("statStressRate").textContent = pct(stressed / n);
-  document.getElementById("statConf").textContent       = pct(avgConf);
   document.getElementById("statPeak").textContent       = meta(peakState).icon + " " + meta(peakState).label;
   document.getElementById("statPeakSub").textContent    = "highest alert reached";
 
@@ -521,11 +461,9 @@ function renderResults(data) {
   // Charts
   const labels  = data.map((d,i) => fmtTime(d, i));
   const levels  = data.map(d => d.adjusted_label);
-  const confArr = data.map(d => isFinite(d.confidence) ? d.confidence : null);
   const pointColors = data.map(d => meta(d.alert_state).color);
 
   makeStressChart(labels, levels, pointColors);
-  makeConfChart(labels, confArr);
 
   // Table
   const tbody = document.getElementById("tableBody");
@@ -538,10 +476,6 @@ function renderResults(data) {
       <td>${fmtTime(d, i)}</td>
       <td>${stressLabel(d.adjusted_label)}</td>
       <td><span class="badge ${m.badge}">${m.label}</span></td>
-      <td>
-        <span class="conf-bar"><span class="conf-fill" style="width:${isFinite(d.confidence)?Math.round(d.confidence*100):0}%"></span></span>
-        ${pct(d.confidence)}
-      </td>
       <td style="color:var(--muted)">${recLabel(d.recommendation)}</td>
     `;
     tbody.appendChild(tr);
