@@ -83,7 +83,7 @@ def apply_decision_support(df: pd.DataFrame, pred_col: str = "pred_label", confi
         else:
             persistent_counter[group_key] = 0
 
-        if stress_like and active and hr_high and not eda_high:
+        if stress_like and active and hr_high:
             state = "physical_activity_delay"
             action = "delay_alert_keep_monitoring"
             adjusted_label = min(pred, 1)
